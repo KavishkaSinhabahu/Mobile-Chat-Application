@@ -1,0 +1,176 @@
+package controller;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import entity.Chat;
+import entity.Chat_Status;
+import entity.User;
+import entity.User_Status;
+import java.io.File;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+import javax.servlet.ServletException;
+import javax.servlet.annotation.WebServlet;
+import javax.servlet.http.HttpServlet;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+import model.HibernateUtil;
+import org.hibernate.Criteria;
+import org.hibernate.Session;
+import org.hibernate.criterion.Order;
+import org.hibernate.criterion.Projections;
+import org.hibernate.criterion.Restrictions;
+
+@WebServlet(name = "LoadHomeData", urlPatterns = {"/LoadHomeData"})
+public class LoadHomeData extends HttpServlet {
+
+    @Override
+    protected void doGet(HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException {
+
+        Gson gson = new Gson();
+
+        JsonObject responseJson = new JsonObject();
+        responseJson.addProperty("success", false);
+        responseJson.addProperty("message", "Unable to process user request");
+
+        try {
+
+            Session session = HibernateUtil.getSessionFactory().openSession();
+
+            //get user from user id
+            String id = request.getParameter("id");
+
+            User user = (User) session.get(User.class, Integer.parseInt(id));
+
+            User_Status user_Status = (User_Status) session.get(User_Status.class, 1);
+
+            user.setUser_status(user_Status);
+            session.update(user);
+
+            //get other users
+            Criteria criteria1 = session.createCriteria(User.class);
+            criteria1.add(Restrictions.ne("id", user.getId()));
+            List<User> otherUserList = criteria1.list();
+
+            JsonArray jsonChatArray = new JsonArray();
+
+            for (User otherUser : otherUserList) {
+
+                //get chatlist
+                Criteria criteria2 = session.createCriteria(Chat.class);
+                criteria2.add(
+                        Restrictions.or(
+                                Restrictions.and(
+                                        Restrictions.eq("from_user", user),
+                                        Restrictions.eq("to_user", otherUser)
+                                ),
+                                Restrictions.and(
+                                        Restrictions.eq("from_user", otherUser),
+                                        Restrictions.eq("to_user", user)
+                                )
+                        )
+                );
+                criteria2.addOrder(Order.desc("id"));
+
+                //set chat item
+                JsonObject chatItem = new JsonObject();
+                chatItem.addProperty("other_user_id", otherUser.getId());
+                chatItem.addProperty("other_user_name", otherUser.getFirst_name() + " " + otherUser.getLast_name());
+                chatItem.addProperty("other_user_mobile", otherUser.getMobile());
+                chatItem.addProperty("other_user_status", otherUser.getUser_status().getId());
+
+                //check image
+                String serverPath = request.getServletContext().getRealPath("");
+                String otherUserImagePath = serverPath + File.separator + "AvatarImages" + File.separator + otherUser.getMobile() + ".png";
+                File otherUserImage = new File(otherUserImagePath);
+
+                if (otherUserImage.exists()) {
+
+                    chatItem.addProperty("other_user_image", true);
+                } else {
+
+                    chatItem.addProperty("other_user_image", false);
+                    chatItem.addProperty("other_user_image_letters", otherUser.getFirst_name().charAt(0) + "" + otherUser.getLast_name().charAt(0));
+                }
+
+                List<Chat> dbChatList = criteria2.list();
+
+                SimpleDateFormat dateFormat = new SimpleDateFormat("MM-dd HH:mm");
+                SimpleDateFormat dateFormat1 = new SimpleDateFormat("MM-dd");
+
+                if (dbChatList.isEmpty()) {
+
+                    chatItem.addProperty("message", "Say Hi!");
+                    chatItem.addProperty("dateTime", dateFormat1.format(user.getRegistered_date_time()));
+                    chatItem.addProperty("chat_status_id", 1);
+                } else {
+
+                    chatItem.addProperty("message", dbChatList.get(0).getMessage());
+                    chatItem.addProperty("dateTime", dateFormat.format(dbChatList.get(0).getDate_time()));
+
+                    Chat_Status chat_Status = (Chat_Status) session.get(Chat_Status.class, 2);
+                    criteria2.add(Restrictions.eq("chat_status", chat_Status));
+                    criteria2.setProjection(Projections.rowCount());
+
+                    Long unseenCount = (Long) criteria2.uniqueResult();
+                    
+                    if (dbChatList.get(0).getFrom_user() == user) {
+
+                        chatItem.addProperty("chat_man", true);
+                        chatItem.addProperty("chat_status_id", dbChatList.get(0).getChat_status().getId());
+                    } else if (dbChatList.get(0).getFrom_user() == otherUser) {
+
+                            chatItem.addProperty("chat_man", false);
+                            chatItem.addProperty("chat_unseen_count", unseenCount);
+
+                    }
+
+                }
+
+                jsonChatArray.add(chatItem);
+            }
+            
+            List<JsonObject> chatList = new ArrayList<>();
+            for (int i = 0; i < jsonChatArray.size(); i++) {
+                chatList.add(jsonChatArray.get(i).getAsJsonObject());
+            }
+
+            Collections.sort(chatList, new Comparator<JsonObject>() {
+                @Override
+                public int compare(JsonObject o1, JsonObject o2) {
+                    String dateTime1 = o1.get("dateTime").getAsString();
+                    String dateTime2 = o2.get("dateTime").getAsString();
+                    return dateTime2.compareTo(dateTime1); // Descending order
+                }
+            });
+
+            // Rebuild jsonChatArray with sorted messages
+            jsonChatArray = new JsonArray();
+            for (JsonObject chatItem : chatList) {
+                jsonChatArray.add(chatItem);
+            }
+
+            //send users
+            responseJson.addProperty("success", true);
+            responseJson.addProperty("message", "Success");
+//            responseJson.add("user", gson.toJsonTree(user));
+            responseJson.add("jsonChatArray", gson.toJsonTree(jsonChatArray));
+
+            session.beginTransaction().commit();
+            session.close();
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        response.setContentType("application/json");
+        response.getWriter().write(gson.toJson(responseJson));
+
+    }
+
+}

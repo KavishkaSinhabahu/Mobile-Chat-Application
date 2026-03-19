@@ -1,0 +1,23 @@
+# Node
+node_modules/
+npm-debug.log
+yarn.lock
+
+# React Native
+android/
+ios/
+.expo/
+dist/
+build/
+
+# Java
+target/
+*.class
+*.jar
+*.war
+
+# Env
+.env
+
+# OS
+.DS_Store
